@@ -37,30 +37,36 @@ async def generate_ai_response(
         except Exception as e:
             logger.warning("rag_search_failed", error=str(e))
     
-    # System prompt por defecto si no se proporciona
+    # System prompt restrictivo
     if not system_prompt:
-        system_prompt = f"""Eres un asistente virtual amigable y profesional de {company_name}.
+        system_prompt = f"""Eres el asistente virtual oficial de {company_name}. Tu ÚNICO propósito es ayudar a los clientes con información sobre la empresa, sus servicios y productos.
 
-REGLAS:
-1. Responde de forma concisa (máximo 2-3 oraciones)
-2. Sé amable y servicial
-3. Si no sabes algo, ofrece conectar con un humano
-4. Si el usuario quiere agendar cita, pregunta día y hora
-5. Si detectas frustración, ofrece escalar a un humano
-6. USA LA INFORMACIÓN DE LA EMPRESA cuando esté disponible
+REGLAS ESTRICTAS:
+1. SOLO responde preguntas relacionadas con {company_name}, sus servicios, productos, precios, horarios y citas.
+2. Si el usuario pregunta algo NO relacionado con la empresa (cultura general, otros temas, etc.), responde amablemente: "Soy el asistente de {company_name} y solo puedo ayudarte con información sobre nuestros servicios. ¿Te gustaría saber sobre nuestros precios, horarios o agendar una cita?"
+3. Responde de forma concisa (máximo 2-3 oraciones).
+4. Sé amable y profesional.
+5. Si no tienes información específica, ofrece conectar con un asesor humano.
+6. Si el usuario quiere agendar cita, pregunta día y hora preferidos.
+7. Si detectas frustración o quejas, ofrece escalar a un humano inmediatamente.
+8. USA SIEMPRE la información de la empresa proporcionada abajo cuando esté disponible.
+9. NUNCA inventes información que no esté en el contexto de la empresa.
+10. Recuerda el contexto de la conversación y usa el nombre del cliente si lo mencionó.
 
-OBJETIVO: Ayudar al cliente y guiarlo hacia agendar una cita o resolver su consulta."""
+OBJETIVO PRINCIPAL: Guiar al cliente hacia agendar una cita o resolver su consulta sobre la empresa."""
 
     # Agregar contexto RAG al system prompt
     if rag_context:
         system_prompt += f"\n\n{rag_context}"
+    else:
+        system_prompt += f"\n\nNOTA: No hay información específica cargada sobre la empresa aún. Ofrece conectar con un asesor para más detalles."
 
     # Construir mensajes
     messages = [
         {"role": "system", "content": system_prompt}
     ]
     
-    # Agregar historial si existe
+    # Agregar historial si existe (para memoria de conversación)
     if conversation_history:
         messages.extend(conversation_history)
     
@@ -68,7 +74,12 @@ OBJETIVO: Ayudar al cliente y guiarlo hacia agendar una cita o resolver su consu
     messages.append({"role": "user", "content": user_message})
     
     try:
-        logger.info("calling_openai", message_preview=user_message[:50], has_rag=bool(rag_context))
+        logger.info(
+            "calling_openai", 
+            message_preview=user_message[:50], 
+            has_rag=bool(rag_context),
+            history_length=len(conversation_history) if conversation_history else 0
+        )
         
         response = await client.chat.completions.create(
             model=settings.openai_model,
@@ -88,12 +99,12 @@ OBJETIVO: Ayudar al cliente y guiarlo hacia agendar una cita o resolver su consu
         
         # Detectar si debe escalar
         action = None
-        if any(word in user_message.lower() for word in ["humano", "persona", "asesor", "queja"]):
+        if any(word in user_message.lower() for word in ["humano", "persona", "asesor", "queja", "supervisor", "gerente"]):
             action = "escalate"
         
         # Detectar intención de cita
         lead_status = "interesado"
-        if any(word in user_message.lower() for word in ["cita", "agendar", "reservar"]):
+        if any(word in user_message.lower() for word in ["cita", "agendar", "reservar", "apartar", "programar"]):
             lead_status = "caliente"
         
         return AgentResponse(
