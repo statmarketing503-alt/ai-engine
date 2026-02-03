@@ -11,8 +11,13 @@ from app.core.config import settings
 
 # Crear engine async
 # NullPool es recomendado para aplicaciones async
+# Convertir URL de Railway a formato asyncpg
+database_url = settings.database_url
+if database_url.startswith("postgresql://"):
+    database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    
 engine = create_async_engine(
-    settings.database_url,
+    database_url,
     echo=settings.debug,  # Log SQL queries en desarrollo
     poolclass=NullPool if settings.is_development else None,
 )
