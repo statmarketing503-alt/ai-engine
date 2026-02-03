@@ -36,7 +36,6 @@ def get_collection_name(company_id: str) -> str:
 def generate_numeric_id(content: str) -> int:
     """Genera un ID numérico único basado en el contenido."""
     hash_hex = hashlib.md5(content.encode()).hexdigest()
-    # Tomar los primeros 15 caracteres hex y convertir a int
     return int(hash_hex[:15], 16)
 
 
@@ -92,23 +91,19 @@ async def add_document(
     """
     collection_name = await ensure_collection_exists(company_id)
     
-    # Generar ID numérico si no se proporciona
     if doc_id is None:
         doc_id = generate_numeric_id(content)
     
-    # Crear embedding
     embedding = await create_embedding(content)
     
     logger.info("adding_document", company_id=company_id, doc_id=doc_id, content_preview=content[:50])
     
-    # Preparar payload
     payload = {
         "content": content,
         "company_id": company_id,
         **(metadata or {})
     }
     
-    # Insertar en Qdrant
     qdrant_client.upsert(
         collection_name=collection_name,
         points=[
@@ -135,7 +130,6 @@ async def search_documents(
     collection_name = get_collection_name(company_id)
     
     try:
-        # Verificar si existe la colección
         collections = qdrant_client.get_collections()
         exists = any(c.name == collection_name for c in collections.collections)
         
@@ -145,7 +139,6 @@ async def search_documents(
             logger.info("no_collection_for_company", company_id=company_id)
             return []
         
-        # Verificar cuántos puntos hay en la colección
         collection_info = qdrant_client.get_collection(collection_name)
         logger.info("collection_info", points_count=collection_info.points_count)
         
@@ -153,25 +146,61 @@ async def search_documents(
             logger.info("collection_empty", company_id=company_id)
             return []
         
-        # Crear embedding de la consulta
         query_embedding = await create_embedding(query)
         
-        # Buscar en Qdrant usando query_points
-        search_result = qdrant_client.query_points(
-            collection_name=collection_name,
-            query=query_embedding,
-            limit=limit
-        )
+        # Usar el método correcto según la versión de qdrant-client
+        try:
+            # Intentar con query_points (versiones más nuevas)
+            search_result = qdrant_client.query_points(
+                collection_name=collection_name,
+                query=query_embedding,
+                limit=limit
+            )
+            results = search_result.points
+            logger.info("used_query_points_method")
+        except AttributeError:
+            try:
+                # Intentar con search (versiones intermedias)
+                results = qdrant_client.search(
+                    collection_name=collection_name,
+                    query_vector=query_embedding,
+                    limit=limit
+                )
+                logger.info("used_search_method")
+            except AttributeError:
+                # Usar HTTP request directo como último recurso
+                import httpx
+                url = f"http://{settings.qdrant_host}:{settings.qdrant_port}/collections/{collection_name}/points/search"
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(url, json={
+                        "vector": query_embedding,
+                        "limit": limit,
+                        "with_payload": True
+                    })
+                    data = response.json()
+                    results = data.get("result", [])
+                logger.info("used_http_method")
         
-        logger.info("search_raw_results", count=len(search_result.points))
+        logger.info("search_raw_results", count=len(results))
         
-        # Formatear resultados
         documents = []
-        for result in search_result.points:
+        for result in results:
+            # Manejar diferentes formatos de resultado
+            if hasattr(result, 'payload'):
+                content = result.payload.get("content", "")
+                score = result.score
+                meta = {k: v for k, v in result.payload.items() if k != "content"}
+            elif isinstance(result, dict):
+                content = result.get("payload", {}).get("content", "")
+                score = result.get("score", 0)
+                meta = {k: v for k, v in result.get("payload", {}).items() if k != "content"}
+            else:
+                continue
+                
             documents.append({
-                "content": result.payload.get("content", ""),
-                "score": result.score,
-                "metadata": {k: v for k, v in result.payload.items() if k != "content"}
+                "content": content,
+                "score": score,
+                "metadata": meta
             })
         
         logger.info(
