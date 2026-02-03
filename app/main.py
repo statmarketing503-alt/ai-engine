@@ -279,6 +279,29 @@ async def search_knowledge(
     }
 
 
+@app.delete("/knowledge/clear", tags=["Knowledge Base"])
+async def clear_knowledge(company_id: str = "demo_company"):
+    """Borra todos los documentos de una empresa."""
+    from qdrant_client import QdrantClient
+    from app.core.config import settings
+    
+    try:
+        client = QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
+        collection_name = f"company_{company_id}_docs"
+        
+        # Verificar si existe
+        collections = client.get_collections()
+        exists = any(c.name == collection_name for c in collections.collections)
+        
+        if exists:
+            client.delete_collection(collection_name)
+            return {"message": f"Collection {collection_name} deleted", "company_id": company_id}
+        else:
+            return {"message": "Collection not found", "company_id": company_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ===========================================
 # FEEDBACK Y MÉTRICAS
 # ===========================================
