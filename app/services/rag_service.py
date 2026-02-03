@@ -33,6 +33,13 @@ def get_collection_name(company_id: str) -> str:
     return f"company_{company_id}_docs"
 
 
+def generate_numeric_id(content: str) -> int:
+    """Genera un ID numérico único basado en el contenido."""
+    hash_hex = hashlib.md5(content.encode()).hexdigest()
+    # Tomar los primeros 15 caracteres hex y convertir a int
+    return int(hash_hex[:15], 16)
+
+
 async def create_embedding(text: str) -> List[float]:
     """
     Crea embedding de un texto usando OpenAI.
@@ -78,19 +85,21 @@ async def add_document(
     company_id: str,
     content: str,
     metadata: dict = None,
-    doc_id: str = None
-) -> str:
+    doc_id: int = None
+) -> int:
     """
     Agrega un documento a la base de conocimiento de una empresa.
     """
     collection_name = await ensure_collection_exists(company_id)
     
-    # Generar ID si no se proporciona
-    if not doc_id:
-        doc_id = hashlib.md5(content.encode()).hexdigest()
+    # Generar ID numérico si no se proporciona
+    if doc_id is None:
+        doc_id = generate_numeric_id(content)
     
     # Crear embedding
     embedding = await create_embedding(content)
+    
+    logger.info("adding_document", company_id=company_id, doc_id=doc_id, content_preview=content[:50])
     
     # Preparar payload
     payload = {
@@ -130,24 +139,31 @@ async def search_documents(
         collections = qdrant_client.get_collections()
         exists = any(c.name == collection_name for c in collections.collections)
         
+        logger.info("searching_documents", company_id=company_id, collection=collection_name, exists=exists)
+        
         if not exists:
             logger.info("no_collection_for_company", company_id=company_id)
             return []
         
+        # Verificar cuántos puntos hay en la colección
+        collection_info = qdrant_client.get_collection(collection_name)
+        logger.info("collection_info", points_count=collection_info.points_count)
+        
         # Crear embedding de la consulta
         query_embedding = await create_embedding(query)
         
-        # Buscar en Qdrant usando query_points (API actualizada)
-        search_result = qdrant_client.query_points(
+        # Buscar en Qdrant usando search (más compatible)
+        search_result = qdrant_client.search(
             collection_name=collection_name,
-            query=query_embedding,
-            limit=limit,
-            score_threshold=0.5
+            query_vector=query_embedding,
+            limit=limit
         )
+        
+        logger.info("search_raw_results", count=len(search_result))
         
         # Formatear resultados
         documents = []
-        for result in search_result.points:
+        for result in search_result:
             documents.append({
                 "content": result.payload.get("content", ""),
                 "score": result.score,
@@ -168,7 +184,7 @@ async def search_documents(
         return []
 
 
-async def delete_document(company_id: str, doc_id: str) -> bool:
+async def delete_document(company_id: str, doc_id: int) -> bool:
     """
     Elimina un documento de la base de conocimiento.
     """
