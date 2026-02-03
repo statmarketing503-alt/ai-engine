@@ -9,17 +9,15 @@ from sqlalchemy.pool import NullPool
 from app.core.config import settings
 
 
-# Crear engine async
-# NullPool es recomendado para aplicaciones async
 # Convertir URL de Railway a formato asyncpg
 database_url = settings.database_url
 if database_url.startswith("postgresql://"):
     database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    
+
 engine = create_async_engine(
     database_url,
-    echo=settings.debug,  # Log SQL queries en desarrollo
-    poolclass=NullPool if settings.is_development else None,
+    echo=settings.debug,
+    poolclass=NullPool,
 )
 
 # Session factory
@@ -41,7 +39,6 @@ class Base(DeclarativeBase):
 async def get_db() -> AsyncSession:
     """
     Dependency que provee una sesión de base de datos.
-    Usar con: db: AsyncSession = Depends(get_db)
     """
     async with async_session_maker() as session:
         try:
@@ -57,15 +54,13 @@ async def get_db() -> AsyncSession:
 async def init_db():
     """
     Inicializa la base de datos creando todas las tablas.
-    Llamar al inicio de la aplicación.
     """
     async with engine.begin() as conn:
         # Importar todos los modelos para que SQLAlchemy los registre
-        from app.models import Company, User, Conversation, Message, CompanyConfig  # noqa
+        from app.models import Company, User, Conversation, Message, CompanyConfig, Feedback  # noqa
         
-        # Crear tablas (solo en desarrollo, usar Alembic en producción)
-        if settings.is_development:
-            await conn.run_sync(Base.metadata.create_all)
+        # Crear tablas siempre
+        await conn.run_sync(Base.metadata.create_all)
 
 
 async def close_db():
