@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 import structlog
 import time
 
@@ -70,7 +71,7 @@ app = FastAPI(
     - RAG (Retrieval Augmented Generation)
     - Feedback loop para aprendizaje
     """,
-    version="0.1.2",
+    version="0.1.3",
     lifespan=lifespan,
     docs_url="/docs" if settings.is_development else None,
     redoc_url="/redoc" if settings.is_development else None,
@@ -132,7 +133,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def root():
     return {
         "name": settings.app_name,
-        "version": "0.1.2",
+        "version": "0.1.3",
         "status": "running",
         "docs": "/docs" if settings.is_development else "disabled"
     }
@@ -242,38 +243,42 @@ async def create_demo_company():
 # KNOWLEDGE BASE
 # ===========================================
 
+class KnowledgeDocument(BaseModel):
+    company_id: str = "demo_company"
+    title: str = "Documento"
+    content: str
+
+
 @app.post("/knowledge/add", tags=["Knowledge Base"])
-async def add_knowledge_document(
-    company_id: str = "demo_company",
-    title: str = "Documento",
-    content: str = "Contenido del documento"
-):
+async def add_knowledge_document(doc: KnowledgeDocument):
     from app.services.rag_service import add_document
     
     doc_id = await add_document(
-        company_id=company_id,
-        content=content,
-        metadata={"title": title}
+        company_id=doc.company_id,
+        content=doc.content,
+        metadata={"title": doc.title}
     )
     
     return {
         "message": "Document added",
         "doc_id": doc_id,
-        "company_id": company_id
+        "company_id": doc.company_id
     }
 
 
-@app.post("/knowledge/search", tags=["Knowledge Base"])
-async def search_knowledge(
-    company_id: str = "demo_company",
+class SearchQuery(BaseModel):
+    company_id: str = "demo_company"
     query: str = "información"
-):
+
+
+@app.post("/knowledge/search", tags=["Knowledge Base"])
+async def search_knowledge(search: SearchQuery):
     from app.services.rag_service import search_documents
     
-    results = await search_documents(company_id, query, limit=5)
+    results = await search_documents(search.company_id, search.query, limit=5)
     
     return {
-        "query": query,
+        "query": search.query,
         "results": results,
         "count": len(results)
     }
