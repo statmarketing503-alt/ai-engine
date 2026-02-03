@@ -5,7 +5,6 @@ Recibe mensajes de Twilio y los normaliza para procesamiento.
 """
 
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
-from fastapi.responses import Response
 from datetime import datetime
 import structlog
 
@@ -23,15 +22,12 @@ async def whatsapp_webhook(
 ):
     """
     Recibe mensajes de Twilio WhatsApp.
-    
-    Twilio envía datos como form-urlencoded.
-    Procesamos en background para responder rápido a Twilio.
     """
     try:
-        # Obtener datos del form
         form_data = await request.form()
         
-        # Extraer información del mensaje
+        # From = número del usuario que envía
+        # To = número del sandbox de Twilio
         from_number = form_data.get("From", "").replace("whatsapp:", "")
         to_number = form_data.get("To", "").replace("whatsapp:", "")
         body = form_data.get("Body", "")
@@ -44,15 +40,11 @@ async def whatsapp_webhook(
             message_preview=body[:50] if body else ""
         )
         
-        # Validar que hay mensaje
         if not body:
             return WebhookResponse(status="ok", message_id=message_sid)
         
-        # TODO: Obtener company_id basado en el número destino
-        # Por ahora usamos un placeholder
         company_id = "demo_company"
         
-        # Normalizar mensaje
         normalized = NormalizedMessage(
             company_id=company_id,
             user_id=from_number,
@@ -66,12 +58,11 @@ async def whatsapp_webhook(
             }
         )
         
-        # Procesar en background
+        # from_number = usuario (a quien responder)
         background_tasks.add_task(
             process_and_respond_whatsapp,
             normalized,
-            from_number,
-            to_number
+            from_number
         )
         
         return WebhookResponse(status="ok", message_id=message_sid)
@@ -83,23 +74,19 @@ async def whatsapp_webhook(
 
 async def process_and_respond_whatsapp(
     message: NormalizedMessage,
-    to_number: str,
-    from_number: str
+    user_phone: str
 ):
     """
     Procesa el mensaje y envía respuesta por Twilio.
-    Se ejecuta en background.
     """
     try:
-        # Procesar con el orquestador
         response = await process_message(message)
         
-        # Enviar respuesta por Twilio
-        await send_whatsapp_message(to_number, from_number, response.message)
+        await send_whatsapp_message(user_phone, response.message)
         
         logger.info(
             "whatsapp_response_sent",
-            to=to_number,
+            to=user_phone,
             message_preview=response.message[:50]
         )
         
@@ -107,13 +94,15 @@ async def process_and_respond_whatsapp(
         logger.error("whatsapp_process_error", error=str(e))
 
 
-async def send_whatsapp_message(from_number: str, to_number: str, message: str):
+async def send_whatsapp_message(to_number: str, message: str):
     """
     Envía mensaje por Twilio WhatsApp.
+    
+    to_number: número del usuario destinatario
+    message: texto a enviar
     """
     from app.core.config import settings
     
-    # Solo enviar si tenemos credenciales configuradas
     if not settings.twilio_account_sid or settings.twilio_account_sid == "tu-account-sid":
         logger.warning("twilio_not_configured", message="Twilio no está configurado")
         return
@@ -123,10 +112,15 @@ async def send_whatsapp_message(from_number: str, to_number: str, message: str):
         
         client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
         
+        # from_ = número del sandbox de Twilio (configurado en settings)
+        # to = número del usuario
         client.messages.create(
             body=message,
-            from_=f"whatsapp:{from_number}",
+            from_=f"whatsapp:{settings.twilio_whatsapp_number}",
             to=f"whatsapp:{to_number}"
         )
+        
+        logger.info("twilio_message_sent", to=to_number)
+        
     except Exception as e:
         logger.error("twilio_send_error", error=str(e))
