@@ -70,7 +70,7 @@ app = FastAPI(
     - RAG (Retrieval Augmented Generation)
     - Feedback loop para aprendizaje
     """,
-    version="0.1.1",
+    version="0.1.2",
     lifespan=lifespan,
     docs_url="/docs" if settings.is_development else None,
     redoc_url="/redoc" if settings.is_development else None,
@@ -132,7 +132,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def root():
     return {
         "name": settings.app_name,
-        "version": "0.1.0",
+        "version": "0.1.2",
         "status": "running",
         "docs": "/docs" if settings.is_development else "disabled"
     }
@@ -298,6 +298,57 @@ async def clear_knowledge(company_id: str = "demo_company"):
             return {"message": f"Collection {collection_name} deleted", "company_id": company_id}
         else:
             return {"message": "Collection not found", "company_id": company_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/knowledge/debug", tags=["Knowledge Base"])
+async def debug_knowledge(company_id: str = "demo_company"):
+    """Debug: muestra info de la colección de Qdrant."""
+    from qdrant_client import QdrantClient
+    from app.core.config import settings
+    
+    try:
+        client = QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
+        collection_name = f"company_{company_id}_docs"
+        
+        # Listar colecciones
+        collections = client.get_collections()
+        collection_names = [c.name for c in collections.collections]
+        
+        # Info de la colección específica
+        collection_info = None
+        points_sample = []
+        
+        if collection_name in collection_names:
+            info = client.get_collection(collection_name)
+            collection_info = {
+                "name": collection_name,
+                "points_count": info.points_count,
+                "vectors_count": info.vectors_count
+            }
+            
+            # Obtener algunos puntos de muestra
+            try:
+                scroll_result = client.scroll(
+                    collection_name=collection_name,
+                    limit=5,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                points_sample = [
+                    {"id": p.id, "payload": p.payload}
+                    for p in scroll_result[0]
+                ]
+            except Exception as e:
+                points_sample = [{"error": str(e)}]
+        
+        return {
+            "all_collections": collection_names,
+            "target_collection": collection_name,
+            "collection_info": collection_info,
+            "points_sample": points_sample
+        }
     except Exception as e:
         return {"error": str(e)}
 
