@@ -149,21 +149,25 @@ async def search_documents(
         collection_info = qdrant_client.get_collection(collection_name)
         logger.info("collection_info", points_count=collection_info.points_count)
         
+        if collection_info.points_count == 0:
+            logger.info("collection_empty", company_id=company_id)
+            return []
+        
         # Crear embedding de la consulta
         query_embedding = await create_embedding(query)
         
-        # Buscar en Qdrant usando search (más compatible)
-        search_result = qdrant_client.search(
+        # Buscar en Qdrant usando query_points
+        search_result = qdrant_client.query_points(
             collection_name=collection_name,
-            query_vector=query_embedding,
+            query=query_embedding,
             limit=limit
         )
         
-        logger.info("search_raw_results", count=len(search_result))
+        logger.info("search_raw_results", count=len(search_result.points))
         
         # Formatear resultados
         documents = []
-        for result in search_result:
+        for result in search_result.points:
             documents.append({
                 "content": result.payload.get("content", ""),
                 "score": result.score,
