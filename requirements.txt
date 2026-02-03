@@ -26,7 +26,7 @@ openai>=1.10.0
 tiktoken>=0.5.2
 
 # Vector Database
-qdrant-client>=1.6.0
+qdrant-client==1.7.0
 
 # Twilio (WhatsApp y Voice)
 twilio>=8.10.0
