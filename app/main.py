@@ -71,7 +71,7 @@ app = FastAPI(
     - RAG (Retrieval Augmented Generation)
     - Feedback loop para aprendizaje
     """,
-    version="0.1.3",
+    version="0.2.0",
     lifespan=lifespan,
     docs_url="/docs" if settings.is_development else None,
     redoc_url="/redoc" if settings.is_development else None,
@@ -133,7 +133,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def root():
     return {
         "name": settings.app_name,
-        "version": "0.1.3",
+        "version": "0.2.0",
         "status": "running",
         "docs": "/docs" if settings.is_development else "disabled"
     }
@@ -182,7 +182,10 @@ async def readiness_check():
 # ===========================================
 
 from app.api.webhooks.whatsapp import router as whatsapp_router
+from app.api.webhooks.voice import router as voice_router
+
 app.include_router(whatsapp_router, prefix="/webhook", tags=["Webhooks"])
+app.include_router(voice_router, prefix="/webhook", tags=["Webhooks"])
 
 
 # ===========================================
