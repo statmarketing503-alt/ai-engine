@@ -1,125 +1,141 @@
 """
-Servicio de Voz - Text-to-Speech con ElevenLabs y Speech-to-Text con Whisper.
+Webhook para Twilio Voice.
+
+Maneja llamadas entrantes con Speech-to-Text y Text-to-Speech.
 """
 
-import openai
-import httpx
+from fastapi import APIRouter, Request
+from fastapi.responses import PlainTextResponse
 import structlog
-from typing import Optional
-import base64
 
-from app.core.config import settings
+from app.services.voice_service import speech_to_text, text_to_speech
+from app.services.ai_service import generate_ai_response
 
+router = APIRouter()
 logger = structlog.get_logger()
 
-# Cliente OpenAI para Whisper
-openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+
+@router.post("/voice", response_class=PlainTextResponse)
+async def voice_webhook(request: Request):
+    """
+    Recibe llamadas entrantes de Twilio Voice.
+    Responde con TwiML para grabar el mensaje del usuario.
+    """
+    form_data = await request.form()
+    
+    call_sid = form_data.get("CallSid", "")
+    from_number = form_data.get("From", "")
+    
+    logger.info("voice_call_received", call_sid=call_sid, from_number=from_number)
+    
+    # TwiML: Saludar y grabar lo que dice el usuario
+    twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say language="es-MX" voice="Polly.Mia">
+        Hola, gracias por llamar. ¿En qué puedo ayudarte?
+    </Say>
+    <Record 
+        maxLength="30" 
+        action="/webhook/voice/process"
+        recordingStatusCallback="/webhook/voice/status"
+        transcribe="false"
+        playBeep="false"
+        timeout="3"
+    />
+    <Say language="es-MX" voice="Polly.Mia">
+        No escuché nada. Por favor llama de nuevo.
+    </Say>
+</Response>"""
+    
+    return PlainTextResponse(content=twiml, media_type="application/xml")
 
 
-async def speech_to_text(audio_url: str) -> Optional[str]:
+@router.post("/voice/process", response_class=PlainTextResponse)
+async def process_voice(request: Request):
     """
-    Convierte audio a texto usando OpenAI Whisper.
-    
-    Args:
-        audio_url: URL del archivo de audio (de Twilio)
-    
-    Returns:
-        Texto transcrito o None si falla
+    Procesa la grabación del usuario.
+    1. Descarga el audio
+    2. Transcribe con Whisper
+    3. Genera respuesta con GPT-4
+    4. Responde con voz
     """
-    try:
-        # Descargar audio de Twilio
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                audio_url,
-                auth=(settings.twilio_account_sid, settings.twilio_auth_token)
-            )
-            audio_data = response.content
-        
-        # Crear archivo temporal en memoria
-        audio_file = ("audio.wav", audio_data, "audio/wav")
-        
-        # Transcribir con Whisper
-        transcript = await openai_client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file,
-            language="es"  # Detecta automáticamente, pero priorizamos español
-        )
-        
-        logger.info("speech_to_text_success", text_preview=transcript.text[:50])
-        return transcript.text
-        
-    except Exception as e:
-        logger.error("speech_to_text_error", error=str(e))
-        return None
+    form_data = await request.form()
+    
+    recording_url = form_data.get("RecordingUrl", "")
+    call_sid = form_data.get("CallSid", "")
+    
+    logger.info("processing_voice", call_sid=call_sid, recording_url=recording_url)
+    
+    if not recording_url:
+        return _error_response("No pude escucharte. Intenta de nuevo.")
+    
+    # 1. Transcribir audio con Whisper
+    user_text = await speech_to_text(recording_url)
+    
+    if not user_text:
+        return _error_response("No pude entender lo que dijiste. Intenta de nuevo.")
+    
+    logger.info("transcription_complete", text=user_text[:50])
+    
+    # 2. Generar respuesta con IA
+    response = await generate_ai_response(
+        user_message=user_text,
+        company_id="demo_company"
+    )
+    
+    ai_text = response.message
+    logger.info("ai_response_complete", text=ai_text[:50])
+    
+    # 3. Responder con voz (usando Polly de Twilio por simplicidad)
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say language="es-MX" voice="Polly.Mia">{ai_text}</Say>
+    <Say language="es-MX" voice="Polly.Mia">
+        ¿Hay algo más en que pueda ayudarte?
+    </Say>
+    <Record 
+        maxLength="30" 
+        action="/webhook/voice/process"
+        playBeep="false"
+        timeout="5"
+    />
+    <Say language="es-MX" voice="Polly.Mia">
+        Gracias por llamar. Hasta pronto.
+    </Say>
+    <Hangup/>
+</Response>"""
+    
+    return PlainTextResponse(content=twiml, media_type="application/xml")
 
 
-async def text_to_speech(text: str, voice_id: str = None) -> Optional[bytes]:
+@router.post("/voice/status")
+async def recording_status(request: Request):
     """
-    Convierte texto a audio usando ElevenLabs.
-    
-    Args:
-        text: Texto a convertir
-        voice_id: ID de la voz (opcional, usa default)
-    
-    Returns:
-        Audio en bytes (MP3) o None si falla
+    Callback para el estado de la grabación.
     """
-    if not settings.elevenlabs_api_key:
-        logger.warning("elevenlabs_not_configured")
-        return None
+    form_data = await request.form()
+    status = form_data.get("RecordingStatus", "")
+    recording_url = form_data.get("RecordingUrl", "")
     
-    voice_id = voice_id or settings.elevenlabs_voice_id
+    logger.info("recording_status", status=status, url=recording_url)
     
-    try:
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-        
-        headers = {
-            "Accept": "audio/mpeg",
-            "Content-Type": "application/json",
-            "xi-api-key": settings.elevenlabs_api_key
-        }
-        
-        data = {
-            "text": text,
-            "model_id": "eleven_multilingual_v2",
-            "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75,
-                "style": 0.0,
-                "use_speaker_boost": True
-            }
-        }
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, json=data, headers=headers)
-            
-            if response.status_code == 200:
-                logger.info("text_to_speech_success", text_preview=text[:50])
-                return response.content
-            else:
-                logger.error(
-                    "text_to_speech_error", 
-                    status=response.status_code,
-                    response=response.text
-                )
-                return None
-                
-    except Exception as e:
-        logger.error("text_to_speech_error", error=str(e))
-        return None
+    return {"status": "ok"}
 
 
-async def text_to_speech_url(text: str, voice_id: str = None) -> Optional[str]:
-    """
-    Convierte texto a audio y retorna URL base64 para Twilio.
-    
-    Twilio puede reproducir audio desde una URL o desde datos base64.
-    """
-    audio_bytes = await text_to_speech(text, voice_id)
-    
-    if audio_bytes:
-        # Convertir a base64 data URL
-        b64_audio = base64.b64encode(audio_bytes).decode('utf-8')
-        return f"data:audio/mpeg;base64,{b64_audio}"
-    
-    return None
+def _error_response(message: str) -> PlainTextResponse:
+    """Genera respuesta TwiML de error."""
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say language="es-MX" voice="Polly.Mia">{message}</Say>
+    <Record 
+        maxLength="30" 
+        action="/webhook/voice/process"
+        playBeep="false"
+        timeout="3"
+    />
+    <Say language="es-MX" voice="Polly.Mia">
+        Gracias por llamar. Hasta pronto.
+    </Say>
+    <Hangup/>
+</Response>"""
+    return PlainTextResponse(content=twiml, media_type="application/xml")
