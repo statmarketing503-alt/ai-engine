@@ -19,16 +19,14 @@ logger = structlog.get_logger()
 async def voice_webhook(request: Request):
     """
     Recibe llamadas entrantes de Twilio Voice.
-    Responde con TwiML para grabar el mensaje del usuario.
     """
     form_data = await request.form()
     
     call_sid = form_data.get("CallSid", "")
     from_number = form_data.get("From", "")
     
-    logger.info("voice_call_received", call_sid=call_sid, from_number=from_number)
+    print(f"📞 LLAMADA RECIBIDA: {from_number} - CallSid: {call_sid}")
     
-    # TwiML: Saludar y grabar lo que dice el usuario
     twiml = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say language="es-MX" voice="Polly.Mia">
@@ -54,39 +52,39 @@ async def voice_webhook(request: Request):
 async def process_voice(request: Request):
     """
     Procesa la grabación del usuario.
-    1. Descarga el audio
-    2. Transcribe con Whisper
-    3. Genera respuesta con GPT-4
-    4. Responde con voz
     """
     form_data = await request.form()
     
     recording_url = form_data.get("RecordingUrl", "")
     call_sid = form_data.get("CallSid", "")
     
-    logger.info("processing_voice", call_sid=call_sid, recording_url=recording_url)
+    print(f"🎙️ PROCESANDO AUDIO: {recording_url}")
     
     if not recording_url:
+        print("❌ NO HAY URL DE GRABACIÓN")
         return _error_response("No pude escucharte. Intenta de nuevo.")
     
     # 1. Transcribir audio con Whisper
+    print("🔄 Transcribiendo con Whisper...")
     user_text = await speech_to_text(recording_url)
     
     if not user_text:
+        print("❌ TRANSCRIPCIÓN FALLÓ")
         return _error_response("No pude entender lo que dijiste. Intenta de nuevo.")
     
-    logger.info("transcription_complete", text=user_text[:50])
+    print(f"✅ TRANSCRIPCIÓN: {user_text}")
     
     # 2. Generar respuesta con IA
+    print("🤖 Generando respuesta con GPT-4...")
     response = await generate_ai_response(
         user_message=user_text,
         company_id="demo_company"
     )
     
     ai_text = response.message
-    logger.info("ai_response_complete", text=ai_text[:50])
+    print(f"✅ RESPUESTA IA: {ai_text}")
     
-    # 3. Responder con voz (usando Polly de Twilio por simplicidad)
+    # 3. Responder con voz
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say language="es-MX" voice="Polly.Mia">{ai_text}</Say>
@@ -117,7 +115,7 @@ async def recording_status(request: Request):
     status = form_data.get("RecordingStatus", "")
     recording_url = form_data.get("RecordingUrl", "")
     
-    logger.info("recording_status", status=status, url=recording_url)
+    print(f"📊 ESTADO GRABACIÓN: {status} - URL: {recording_url}")
     
     return {"status": "ok"}
 
